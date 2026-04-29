@@ -9,9 +9,8 @@ connection_hold_seconds: 300
 connection:
   enable: true
   immediate_limit: true
-  # 监控这些端口的公网访问 → 有人从外网连接就限速
-  # Immich: 2283, MT Photos: 8060, 绿联云: 8096/8920
-  monitor_local_ports: [2283, 8060, 8096, 8920]
+  # 监控 16666 端口的公网连接 → 有人访问 Immich/MT Photos 就限速
+  monitor_local_ports: [16666]
   ignore_remote_ports: [22, 51413]
   ignore_local_ports: []
 
