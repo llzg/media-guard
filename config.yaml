@@ -1,24 +1,34 @@
 interface: ovs_eth1
-interval: 2
-trigger: 0.8
+interval: 1
+trigger: 2.0
 recover: 0.3
-trigger_count: 5
-recover_count: 30
-log_hold_seconds: 60
+trigger_count: 2
+recover_count: 60
+connection_hold_seconds: 60
+
+connection:
+  enable: true
+  immediate_limit: true
+  ignore_remote_ports: [22]
 
 qb:
   enable: true
   url: http://192.168.5.202:8080
-  user: admin
-  pass: admin         # ← 你的实际密码
-  limit: 5120         # 触发后限制到 5120 KB/s (5 MB/s)
-  normal: 0           # 恢复后取消限速
+  user: YOUR_QB_USER
+  pass: YOUR_QB_PASSWORD
+  limit: 5120
+  normal: 0
 
 tr:
-  enable: false       # 没检测到 Transmission, 先关掉
-
-lucky:
-  enable: false       # Lucky 没有独立 access.log, 先关掉
+  enable: false
+  host: 127.0.0.1
+  port: 9091
+  user: YOUR_TR_USER
+  pass: YOUR_TR_PASSWORD
+  limit: 1024
+  normal: 0
 
 notify:
   enable: false
+  mode: wechat_robot
+  webhook: ""
