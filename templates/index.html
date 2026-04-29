@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modbus 读写 & 趋势图</title>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz@14..32&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, sans-serif; background: #0f1117; color: #e1e4e8; min-height: 100vh; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        .header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; padding: 16px 0; border-bottom: 1px solid #21262d; }
+        .header h1 { font-size: 22px; font-weight: 600; background: linear-gradient(135deg, #58a6ff, #3fb950); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: 8px; }
+        .status-dot.online { background: #3fb950; box-shadow: 0 0 8px #3fb95088; }
+        .status-dot.offline { background: #f85149; box-shadow: 0 0 8px #f8514988; }
+        .status-text { font-size: 13px; color: #8b949e; }
+        
+        /* Cards */
+        .card { background: #161b22; border: 1px solid #21262d; border-radius: 12px; padding: 20px; }
+        .card-title { font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+        
+        /* Grid */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+        .grid-full { grid-column: 1 / -1; }
+        
+        /* Form */
+        label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px; font-weight: 500; }
+        input, select, button { font-family: inherit; }
+        input, select {
+            width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d;
+            border-radius: 8px; color: #e1e4e8; font-size: 14px; outline: none; transition: border 0.2s;
+        }
+        input:focus, select:focus { border-color: #58a6ff; }
+        input::placeholder { color: #484f58; }
+        .input-group { margin-bottom: 10px; }
+        .input-row { display: flex; gap: 8px; align-items: end; }
+        .input-row .input-group { flex: 1; margin-bottom: 0; }
+        
+        /* Buttons */
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+        .btn-primary { background: #238636; color: #fff; }
+        .btn-primary:hover { background: #2ea043; }
+        .btn-danger { background: #da3633; color: #fff; }
+        .btn-danger:hover { background: #f85149; }
+        .btn-secondary { background: #21262d; color: #c9d1d9; }
+        .btn-secondary:hover { background: #30363d; }
+        .btn-success { background: #1f6feb; color: #fff; }
+        .btn-success:hover { background: #388bfd; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        
+        /* Tags Table */
+        .tags-list { margin-top: 10px; }
+        .tag-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #0d1117; border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+        .tag-item .tag-name { font-weight: 600; color: #58a6ff; min-width: 80px; }
+        .tag-item .tag-addr { color: #8b949e; font-family: monospace; }
+        .tag-item .tag-val { color: #d2a8ff; font-family: monospace; font-weight: 600; margin-left: auto; }
+        .tag-item .tag-del { background: none; border: none; color: #f85149; cursor: pointer; padding: 2px 6px; font-size: 16px; }
+        .tag-item .tag-del:hover { color: #ff6b6b; }
+        
+        /* Trend Chart */
+        .chart-container { position: relative; height: 300px; margin-top: 10px; }
+        
+        /* Read Result */
+        .read-result { margin-top: 10px; padding: 12px; background: #0d1117; border-radius: 8px; font-family: monospace; font-size: 14px; }
+        .read-result .value { color: #d2a8ff; font-size: 24px; font-weight: 700; }
+        .read-result .meta { color: #8b949e; font-size: 12px; margin-top: 4px; }
+        
+        /* Help */
+        .help-text { font-size: 12px; color: #484f58; margin-top: 4px; }
+        .address-examples { font-size: 12px; color: #484f58; margin-top: 6px; }
+        .address-examples code { background: #0d1117; padding: 1px 6px; border-radius: 4px; color: #8b949e; }
+        
+        /* Tab */
+        .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+        .tab { padding: 6px 14px; border: 1px solid #30363d; border-radius: 8px 8px 0 0; font-size: 12px; cursor: pointer; background: #0d1117; color: #8b949e; }
+        .tab.active { background: #21262d; color: #e1e4e8; border-bottom-color: #21262d; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .tag-color-0 { border-left: 3px solid #58a6ff; }
+        .tag-color-1 { border-left: 3px solid #3fb950; }
+        .tag-color-2 { border-left: 3px solid #d2a8ff; }
+        .tag-color-3 { border-left: 3px solid #f0883e; }
+        .tag-color-4 { border-left: 3px solid #f85149; }
+        .tag-color-5 { border-left: 3px solid #79c0ff; }
+        .tag-color-6 { border-left: 3px solid #56d364; }
+        .tag-color-7 { border-left: 3px solid #bc8cff; }
+        
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- Header -->
+    <div class="header">
+        <h1>⚡ Modbus 读写 & 趋势图</h1>
+        <div>
+            <span class="status-dot offline" id="statusDot"></span>
+            <span class="status-text" id="statusText">未连接</span>
+        </div>
+    </div>
+
+    <!-- Connection -->
+    <div class="card" style="margin-bottom: 16px;">
+        <div class="card-title">🔌 连接</div>
+        <div class="input-row">
+            <div class="input-group">
+                <label>主机地址</label>
+                <input type="text" id="modbusHost" value="127.0.0.1" placeholder="IP 或域名">
+            </div>
+            <div class="input-group" style="max-width: 100px;">
+                <label>端口</label>
+                <input type="number" id="modbusPort" value="502" placeholder="502">
+            </div>
+            <div class="input-group" style="display: flex; gap: 6px; align-items: end; padding-bottom: 10px;">
+                <button class="btn btn-success" onclick="connect()">连接</button>
+                <button class="btn btn-danger" onclick="disconnect()">断开</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="grid-2">
+        <!-- 地址换算 -->
+        <div class="card">
+            <div class="card-title">🧮 地址换算</div>
+            <div class="input-row">
+                <div class="input-group">
+                    <label>输入地址</label>
+                    <input type="text" id="parseAddr" value="400001" placeholder="如 400001, 0.0, 1.0, 3x0001" onkeydown="if(event.key==='Enter')parseAddress()">
+                </div>
+                <div style="padding-bottom: 10px;">
+                    <button class="btn btn-primary btn-sm" onclick="parseAddress()">换算</button>
+                </div>
+            </div>
+            <div class="address-examples">
+                示例: <code>400001</code> <code>0.0</code> <code>1.5</code> <code>3x0100</code> <code>30001</code> <code>00000</code>
+            </div>
+            <div id="parseResult" class="read-result" style="display:none;"></div>
+        </div>
+
+        <!-- 手动读写 -->
+        <div class="card">
+            <div class="card-title">📝 手动读写</div>
+            <div class="input-row">
+                <div class="input-group">
+                    <label>地址</label>
+                    <input type="text" id="rwAddr" value="400001" placeholder="PLC 地址">
+                </div>
+                <div class="input-group">
+                    <label>数量</label>
+                    <input type="number" id="rwCount" value="1" min="1" max="125">
+                </div>
+                <div class="input-group" style="max-width: 100px;">
+                    <label>格式</label>
+                    <select id="rwFormat">
+                        <option value="raw">Raw</option>
+                        <option value="uint16">UInt16</option>
+                        <option value="int16">Int16</option>
+                        <option value="int32">Int32</option>
+                        <option value="float32">Float32</option>
+                    </select>
+                </div>
+            </div>
+            <div class="input-row">
+                <div class="input-group" style="flex: 0 0 auto;">
+                    <button class="btn btn-primary btn-sm" onclick="readAddr()">读取</button>
+                </div>
+                <div class="input-group">
+                    <label>写入值</label>
+                    <input type="text" id="writeVal" placeholder="值 (数字或逗号分隔)">
+                </div>
+                <div class="input-group" style="flex: 0 0 auto;">
+                    <button class="btn btn-secondary btn-sm" onclick="writeAddr()">写入</button>
+                </div>
+            </div>
+            <div id="rwResult" class="read-result" style="display:none;"></div>
+        </div>
+    </div>
+
+    <!-- 趋势图 -->
+    <div class="card" style="margin-bottom: 16px;">
+        <div class="card-title">📈 趋势图</div>
+        
+        <!-- 扫描标签管理 -->
+        <div class="grid-3">
+            <div class="input-group">
+                <label>标签名</label>
+                <input type="text" id="tagName" value="温度1" placeholder="如 温度1">
+            </div>
+            <div class="input-group">
+                <label>地址</label>
+                <input type="text" id="tagAddr" value="400001" placeholder="PLC 地址">
+            </div>
+            <div class="input-group">
+                <label>格式</label>
+                <select id="tagFormat">
+                    <option value="raw">Raw</option>
+                    <option value="uint16">UInt16</option>
+                    <option value="int16">Int16</option>
+                    <option value="int32">Int32</option>
+                    <option value="float32">Float32</option>
+                </select>
+            </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <button class="btn btn-secondary btn-sm" onclick="addTag()">➕ 添加标签</button>
+            <button class="btn btn-success btn-sm" onclick="startPoll()" id="pollStartBtn">▶ 开始轮询</button>
+            <button class="btn btn-danger btn-sm" onclick="stopPoll()" id="pollStopBtn" disabled>■ 停止</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearTrend()">🗑 清除数据</button>
+        </div>
+
+        <div id="tagsContainer" class="tags-list"></div>
+
+        <div class="chart-container">
+            <canvas id="trendChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script>
+// ── 状态 ──────────────────────────────────────────────────────────────
+const socket = io();
+let tags = [];
+let trendChart = null;
+let tagColors = {};
+const colorList = ['#58a6ff','#3fb950','#d2a8ff','#f0883e','#f85149','#79c0ff','#56d364','#bc8cff','#ff7b72','#7ee787'];
+
+function getColor(name) {
+    if (!tagColors[name]) {
+        const used = Object.keys(tagColors).length;
+        tagColors[name] = colorList[used % colorList.length];
+    }
+    return tagColors[name];
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────
+socket.on('modbus_data', (data) => {
+    const { name, value, time } = data;
+    
+    // 更新实时显示
+    const el = document.querySelector(`.tag-item[data-name="${name}"] .tag-val`);
+    if (el) el.textContent = value;
+    
+    // 更新图表
+    if (trendChart) {
+        const idx = trendChart.data.datasets.findIndex(d => d.label === name);
+        if (idx >= 0) {
+            const ds = trendChart.data.datasets[idx];
+            ds.data.push({ x: time, y: value });
+            if (ds.data.length > 200) ds.data.shift();
+        }
+        trendChart.update('none');
+    }
+});
+
+// ── 连接 ──────────────────────────────────────────────────────────────
+async function connect() {
+    const host = document.getElementById('modbusHost').value;
+    const port = document.getElementById('modbusPort').value;
+    const res = await fetch('/api/connect', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({host, port: parseInt(port)})
+    });
+    const data = await res.json();
+    updateStatus(data.ok);
+}
+
+async function disconnect() {
+    await stopPoll();
+    await fetch('/api/disconnect', {method: 'POST'});
+    updateStatus(false);
+}
+
+function updateStatus(ok) {
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    dot.className = 'status-dot ' + (ok ? 'online' : 'offline');
+    text.textContent = ok ? '已连接' : '未连接';
+}
+
+// ── 地址换算 ──────────────────────────────────────────────────────────
+async function parseAddress() {
+    const addr = document.getElementById('parseAddr').value;
+    const res = await fetch('/api/parse-address', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({address: addr})
+    });
+    const data = await res.json();
+    const el = document.getElementById('parseResult');
+    if (data.ok) {
+        el.style.display = 'block';
+        el.innerHTML = `
+            <div class="value">${data.plc_address}</div>
+            <div class="meta">
+                类型: ${data.type} — ${data.description}<br>
+                协议偏移: ${data.offset} (0x${data.offset.toString(16).toUpperCase()})
+            </div>
+        `;
+    } else {
+        el.style.display = 'block';
+        el.innerHTML = `<div style="color:#f85149">❌ ${data.error}</div>`;
+    }
+}
+
+// ── 手动读写 ──────────────────────────────────────────────────────────
+async function readAddr() {
+    const addr = document.getElementById('rwAddr').value;
+    const count = document.getElementById('rwCount').value;
+    const fmt = document.getElementById('rwFormat').value;
+    const res = await fetch('/api/read', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({address: addr, count: parseInt(count), format: fmt})
+    });
+    const data = await res.json();
+    const el = document.getElementById('rwResult');
+    el.style.display = 'block';
+    if (data.ok) {
+        const val = Array.isArray(data.value) ? data.value.join(', ') : data.value;
+        el.innerHTML = `<div class="value">${val}</div><div class="meta">${data.plc_address} → ${data.type}[${data.protocol_address}]</div>`;
+    } else {
+        el.innerHTML = `<div style="color:#f85149">❌ ${data.error}</div>`;
+    }
+}
+
+async function writeAddr() {
+    const addr = document.getElementById('rwAddr').value;
+    const valStr = document.getElementById('writeVal').value;
+    const res = await fetch('/api/write', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({address: addr, value: valStr.includes(',') ? valStr.split(',').map(Number) : Number(valStr)})
+    });
+    const data = await res.json();
+    const el = document.getElementById('rwResult');
+    el.style.display = 'block';
+    if (data.ok) {
+        el.innerHTML = `<div style="color:#3fb950">✅ 写入成功</div>`;
+    } else {
+        el.innerHTML = `<div style="color:#f85149">❌ ${data.error}</div>`;
+    }
+}
+
+// ── 标签管理 ──────────────────────────────────────────────────────────
+function addTag() {
+    const name = document.getElementById('tagName').value.trim();
+    const addr = document.getElementById('tagAddr').value.trim();
+    const fmt = document.getElementById('tagFormat').value;
+    if (!name || !addr) return alert('请输入标签名和地址');
+    if (tags.find(t => t.name === name)) return alert('标签名已存在');
+    tags.push({name, address: addr, format: fmt});
+    renderTags();
+    document.getElementById('tagName').value = '';
+    document.getElementById('tagAddr').value = '';
+}
+
+function removeTag(name) {
+    tags = tags.filter(t => t.name !== name);
+    renderTags();
+    if (trendChart) {
+        const idx = trendChart.data.datasets.findIndex(d => d.label === name);
+        if (idx >= 0) {
+            trendChart.data.datasets.splice(idx, 1);
+            trendChart.update();
+        }
+    }
+}
+
+function renderTags() {
+    const container = document.getElementById('tagsContainer');
+    container.innerHTML = tags.map((t, i) => `
+        <div class="tag-item tag-color-${i % 8}" data-name="${t.name}">
+            <span class="tag-name">${t.name}</span>
+            <span class="tag-addr">${t.address}</span>
+            <span class="tag-addr">${t.format}</span>
+            <span class="tag-val">—</span>
+            <button class="tag-del" onclick="removeTag('${t.name}')">✕</button>
+        </div>
+    `).join('');
+}
+
+// ── 轮询 ──────────────────────────────────────────────────────────────
+async function startPoll() {
+    if (tags.length === 0) return alert('请先添加标签');
+    const res = await fetch('/api/poll/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tags})
+    });
+    const data = await res.json();
+    if (data.ok) {
+        document.getElementById('pollStartBtn').disabled = true;
+        document.getElementById('pollStopBtn').disabled = false;
+        initChart();
+    }
+}
+
+async function stopPoll() {
+    await fetch('/api/poll/stop', {method: 'POST'});
+    document.getElementById('pollStartBtn').disabled = false;
+    document.getElementById('pollStopBtn').disabled = true;
+}
+
+async function clearTrend() {
+    await fetch('/api/trend/all');
+    if (trendChart) {
+        trendChart.data.datasets.forEach(ds => ds.data = []);
+        trendChart.update();
+    }
+}
+
+// ── 图表 ──────────────────────────────────────────────────────────────
+function initChart() {
+    const ctx = document.getElementById('trendChart').getContext('2d');
+    
+    if (trendChart) {
+        trendChart.destroy();
+    }
+    
+    const datasets = tags.map(t => ({
+        label: t.name,
+        data: [],
+        borderColor: getColor(t.name),
+        backgroundColor: getColor(t.name) + '22',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+    }));
+
+    trendChart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 200 },
+            plugins: {
+                legend: {
+                    labels: { color: '#8b949e', font: { size: 11 } }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    backgroundColor: '#161b22',
+                    borderColor: '#30363d',
+                    borderWidth: 1,
+                    titleColor: '#e1e4e8',
+                    bodyColor: '#c9d1d9',
+                }
+            },
+            scales: {
+                x: {
+                    type: 'category',
+                    grid: { color: '#21262d' },
+                    ticks: { color: '#484f58', font: { size: 10 }, maxTicksLimit: 20 }
+                },
+                y: {
+                    grid: { color: '#21262d' },
+                    ticks: { color: '#484f58', font: { size: 10 } }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+}
+</script>
+</body>
+</html>
