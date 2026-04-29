@@ -4,18 +4,26 @@ trigger: 2.0
 recover: 0.3
 trigger_count: 2
 recover_count: 60
-connection_hold_seconds: 60
+connection_hold_seconds: 300
 
 connection:
   enable: true
   immediate_limit: true
-  ignore_remote_ports: [22]
+  # 监控这些端口的公网访问 → 有人从外网连接就限速
+  # Immich: 2283, MT Photos: 8060, 绿联云: 8096/8920
+  monitor_local_ports: [2283, 8060, 8096, 8920]
+  ignore_remote_ports: [22, 51413]
+  ignore_local_ports: []
+
+bandwidth_fallback:
+  enable: false
+  # 如果 monitor_local_ports 没检测到连接，但上传带宽持续超限也触发
 
 qb:
   enable: true
   url: http://192.168.5.202:8080
   user: admin
-  pass: adminadmin
+  pass: equpODdcE50ydK
   limit: 1024
   normal: 0
 
@@ -24,11 +32,9 @@ tr:
   host: 192.168.5.203
   port: 9091
   user: admin
-  pass: admin
+  pass: F4eTYXZw&wsz*b
   limit: 512
   normal: 0
 
 notify:
   enable: false
-  mode: wechat_robot
-  webhook: ""
