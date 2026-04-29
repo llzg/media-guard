@@ -6,5 +6,6 @@ services:
     restart: unless-stopped
     volumes:
       - ./config.yaml:/app/config.yaml
+      - /volume1/docker/lucky/logs:/lucky/logs:ro
     environment:
       - TZ=Asia/Shanghai
