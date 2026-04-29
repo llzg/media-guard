@@ -14,17 +14,17 @@ connection:
 qb:
   enable: true
   url: http://192.168.5.202:8080
-  user: YOUR_QB_USER
-  pass: YOUR_QB_PASSWORD
+  user: admin
+  pass: adminadmin          # ← 改你的 qB 密码
   limit: 5120
   normal: 0
 
 tr:
-  enable: false
-  host: 127.0.0.1
+  enable: true
+  host: 192.168.5.203
   port: 9091
-  user: YOUR_TR_USER
-  pass: YOUR_TR_PASSWORD
+  user: admin
+  pass: admin               # ← 改你的 TR 密码
   limit: 1024
   normal: 0
 

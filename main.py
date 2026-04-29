@@ -225,11 +225,9 @@ def main():
             now = time.time()
             if has_conn:
                 last_public_conn_ts = now
-                if cfg.get("connection", {}).get("immediate_limit", True) and not limited:
-                    last_reason = f"检测到公网连接: {', '.join(ips)}"
-                    controller.apply(True)
-                    limited = True
-                    notify(cfg, f"{last_reason}，已立即限速 qBittorrent / Transmission")
+                # 不再立即限速，只记录供参考
+                if not limited and cfg.get("connection", {}).get("immediate_limit", True) and last_public_conn_ts - now < 2:
+                    log(f"检测到公网连接: {', '.join(ips)} (仅记录，不限速)")
 
             speed, last_tx, last_ts = calc_upload_speed_mb(iface, last_tx, last_ts)
             log(f"当前上传: {speed:.2f} MB/s, 公网连接={has_conn}, limited={limited}")
@@ -251,7 +249,8 @@ def main():
                 notify(cfg, f"{last_reason}，已自动限速 qBittorrent / Transmission")
 
             conn_recent = (now - last_public_conn_ts) <= connection_hold
-            if limited and low_count >= recover_count_need and not conn_recent:
+            # 恢复只看上传速率，不看公网连接了（TR 一直在做种）
+            if limited and low_count >= recover_count_need:
                 controller.apply(False)
                 limited = False
                 notify(cfg, f"外网访问结束，已恢复上传速度。上次触发原因：{last_reason}")
