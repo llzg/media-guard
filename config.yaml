@@ -1,9 +1,10 @@
 interface: eth0
-interval: 5
-trigger: 1.0
-recover: 0.3
-trigger_count: 6
-recover_count: 24
+interval: 1
+trigger: 0.5
+recover: 0.2
+trigger_count: 2
+recover_count: 60
+log_hold_seconds: 60
 
 qb:
   enable: true
@@ -11,6 +12,7 @@ qb:
   user: admin
   pass: admin
   limit: 1024
+  normal: 0
 
 tr:
   enable: true
@@ -19,3 +21,22 @@ tr:
   user: admin
   pass: admin
   limit: 1024
+  normal: 0
+
+lucky:
+  enable: true
+  logs:
+    - /lucky/logs/access.log
+  keywords:
+    immich:
+      - immich
+    mtphotos:
+      - mtphotos
+  ignore_keywords:
+    - health
+    - ping
+
+notify:
+  enable: false
+  mode: wechat_robot
+  webhook: ""
