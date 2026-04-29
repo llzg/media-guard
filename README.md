@@ -1,25 +1,36 @@
-# media-guard
+# media-guard（增强版）
 
-NAS 外网媒体播放自动限速工具。
+NAS 外网媒体访问自动限速（绿联影视 / Immich / MT Photos）
 
-## 功能
+## 特性
 
-- 自动检测外网上传流量
-- 自动限速 qBittorrent / Transmission
-- 外网播放结束自动恢复
+- ⚡ 1 秒检测 + 2 秒触发限速
+- 📊 外网上传流量检测（兜底）
+- 📜 Lucky 日志检测（秒级响应）
+- 🎯 自动识别 Immich / MT Photos
+- 🔧 自动控制 qBittorrent / Transmission
+- 📩 支持企业微信通知
 
-## 使用
+## 启动
 
 ```bash
-git clone https://github.com/llzg/media-guard.git
-cd media-guard
-docker compose up -d
+git pull
+docker compose up -d --build
 ```
 
-## 配置
+## 必改配置
 
-修改 config.yaml
+```yaml
+interface: eth0   # 改成你的外网网卡
+```
 
-## 原理
+## 工作逻辑
 
-检测 NAS 外网上传流量判断是否正在外网播放媒体。
+1. Lucky 日志检测到访问 → 立即限速
+2. 没日志但上传持续高 → 2 秒限速
+3. 上传恢复 + 无日志 → 自动恢复
+
+## 说明
+
+这是 NAS 场景最优解：
+日志触发（快）+ 流量兜底（稳）
