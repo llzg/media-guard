@@ -74,19 +74,47 @@ def has_public_connection(cfg):
 
     ignore_ports = {str(p) for p in cc.get("ignore_remote_ports", [])}
     try:
-        out = subprocess.check_output(["ss", "-tn", "state", "established"], text=True, timeout=3)
+        # Try ss first, fall back to /proc/net/tcp
+        try:
+            out = subprocess.check_output(["ss", "-tn", "state", "established"], text=True, timeout=3)
+            lines = out.splitlines()[1:]
+        except FileNotFoundError:
+            # ss not available (Synology), read /proc/net/tcp instead
+            conns = []
+            with open("/proc/net/tcp") as f:
+                for line in f.readlines()[1:]:
+                    parts = line.strip().split()
+                    if len(parts) >= 10 and parts[3] == "01":  # 01 = ESTABLISHED
+                        local = parts[1]
+                        remote = parts[2]
+                        rip = remote.rsplit(":", 1)[0]
+                        # Convert hex IP to dotted decimal
+                        hex_ip = rip.split(":")[0] if ":" in rip else rip
+                        ip_parts = [str(int(hex_ip[i:i+2], 16)) for i in range(6, -1, -2)]
+                        rip_dotted = ".".join(ip_parts)
+                        rport = str(int(remote.rsplit(":", 1)[-1], 16))
+                        conns.append(f"{rip_dotted}:{rport}")
+                    elif len(parts) >= 10 and parts[3] == "0A":
+                        pass  # 0A = LISTEN, skip
+            lines = conns
     except Exception as e:
         log(f"公网连接检测失败: {e}")
         return False, []
 
     hits = []
-    for line in out.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) < 5:
+    for item in lines:
+        if isinstance(item, str) and ":" in item:
+            # /proc/net/tcp format: "ip:port"
+            rip, rport = item.rsplit(":", 1)
+        elif isinstance(item, str):
+            parts = item.split()
+            if len(parts) < 5:
+                continue
+            peer = parts[4]
+            rip = extract_remote_ip(peer)
+            rport = peer.rsplit(":", 1)[-1]
+        else:
             continue
-        peer = parts[4]
-        rip = extract_remote_ip(peer)
-        rport = peer.rsplit(":", 1)[-1]
         if rport in ignore_ports:
             continue
         if is_public_ip(rip):

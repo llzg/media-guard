@@ -1,42 +1,24 @@
-interface: eth0
-interval: 1
-trigger: 0.5
-recover: 0.2
-trigger_count: 2
-recover_count: 60
+interface: ovs_eth1
+interval: 2
+trigger: 0.8
+recover: 0.3
+trigger_count: 5
+recover_count: 30
 log_hold_seconds: 60
 
 qb:
   enable: true
-  url: http://127.0.0.1:8080
+  url: http://192.168.5.202:8080
   user: admin
-  pass: admin
-  limit: 1024
-  normal: 0
+  pass: admin         # ← 你的实际密码
+  limit: 5120         # 触发后限制到 5120 KB/s (5 MB/s)
+  normal: 0           # 恢复后取消限速
 
 tr:
-  enable: true
-  host: 127.0.0.1
-  port: 9091
-  user: admin
-  pass: admin
-  limit: 1024
-  normal: 0
+  enable: false       # 没检测到 Transmission, 先关掉
 
 lucky:
-  enable: true
-  logs:
-    - /lucky/logs/access.log
-  keywords:
-    immich:
-      - immich
-    mtphotos:
-      - mtphotos
-  ignore_keywords:
-    - health
-    - ping
+  enable: false       # Lucky 没有独立 access.log, 先关掉
 
 notify:
   enable: false
-  mode: wechat_robot
-  webhook: ""
