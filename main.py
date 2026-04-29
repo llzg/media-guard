@@ -159,15 +159,19 @@ class LimitController:
             return
         try:
             if self.qb is None:
-                self.qb = QBClient(host=qbcfg["url"], username=qbcfg["user"], password=qbcfg["pass"])
+                url = qbcfg["url"]
+                # 去掉 http:// 前缀，QBClient 的 host 只要 IP:Port
+                host = url.replace("http://", "").replace("https://", "")
+                self.qb = QBClient(host=host, username=qbcfg["user"], password=qbcfg["pass"])
                 self.qb.auth_log_in()
             limit = qbcfg["limit"] if limited else qbcfg.get("normal", 0)
             self.qb.transfer.set_upload_limit(int(limit) * 1024)
             log(f"qBittorrent 上传限速: {limit} KB/s")
         except Exception as e:
+            import traceback
             self.qb = None
             log(f"qBittorrent 设置失败: {e}")
-            raise
+            log(f"详细: {traceback.format_exc()}")
 
     def set_tr(self, limited):
         trcfg = self.cfg.get("tr", {})
