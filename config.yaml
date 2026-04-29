@@ -1,16 +1,21 @@
-# ──────────────────────────────────────────────────────────────
-# media-guard 配置
-# ──────────────────────────────────────────────────────────────
+interface: eth0
+interval: 5
+trigger: 1.0
+recover: 0.3
+trigger_count: 6
+recover_count: 24
 
-server:
-  host: 0.0.0.0
-  port: 5000
-  debug: false       # 生产环境关闭 debug
+qb:
+  enable: true
+  url: http://127.0.0.1:8080
+  user: admin
+  pass: admin
+  limit: 1024
 
-modbus:
-  timeout: 5         # Modbus TCP 连接超时（秒）
-  retries: 3         # 读取失败重试次数
-
-trend:
-  max_points: 200    # 趋势图每个标签最多点数
-  poll_interval: 1.0 # 轮询间隔（秒）
+tr:
+  enable: true
+  host: 127.0.0.1
+  port: 9091
+  user: admin
+  pass: admin
+  limit: 1024
