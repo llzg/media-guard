@@ -178,15 +178,14 @@ class LimitController:
                 self.tr = TRClient(host=trcfg["host"], port=trcfg["port"], username=trcfg["user"], password=trcfg["pass"])
             limit = trcfg["limit"] if limited else trcfg.get("normal", 0)
             if int(limit) <= 0:
-                self.tr.session_set(speed_limit_up_enabled=False)
+                self.tr.set_session(speed_limit_up_enabled=False)
                 log("Transmission 上传限速: 不限速")
             else:
-                self.tr.session_set(speed_limit_up_enabled=True, speed_limit_up=int(limit))
+                self.tr.set_session(speed_limit_up_enabled=True, speed_limit_up=int(limit))
                 log(f"Transmission 上传限速: {limit} KB/s")
         except Exception as e:
             self.tr = None
             log(f"Transmission 设置失败: {e}")
-            raise
 
     def apply(self, limited):
         self.set_qb(limited)
