@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import os
+import ipaddress
+import subprocess
 import time
-from pathlib import Path
 
 import requests
 import yaml
@@ -18,6 +18,21 @@ def log(msg):
     print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
 
 
+def notify(cfg, message):
+    log(message)
+    nc = cfg.get("notify", {})
+    if not nc.get("enable", False) or not nc.get("webhook"):
+        return
+    try:
+        if nc.get("mode") == "wechat_robot":
+            payload = {"msgtype": "text", "text": {"content": message}}
+        else:
+            payload = {"text": message}
+        requests.post(nc["webhook"], json=payload, timeout=5)
+    except Exception as e:
+        log(f"通知失败: {e}")
+
+
 def get_tx_bytes(interface):
     with open("/proc/net/dev", "r", encoding="utf-8") as f:
         for line in f:
@@ -27,70 +42,57 @@ def get_tx_bytes(interface):
 
 
 def get_upload_speed_mb(interface, interval):
-    before = get_tx_bytes(interface)
+    a = get_tx_bytes(interface)
     time.sleep(interval)
-    after = get_tx_bytes(interface)
-    return max(0, after - before) / interval / 1024 / 1024
+    b = get_tx_bytes(interface)
+    return max(0, b - a) / interval / 1024 / 1024
 
 
-def tail_file(path, offset):
-    p = Path(path)
-    if not p.exists():
-        return offset, ""
-    size = p.stat().st_size
-    if size < offset:
-        offset = 0
-    with p.open("r", encoding="utf-8", errors="ignore") as f:
-        f.seek(offset)
-        data = f.read()
-        return f.tell(), data
-
-
-def detect_lucky(cfg, offsets):
-    lucky = cfg.get("lucky", {})
-    if not lucky.get("enable", False):
-        return None, offsets
-
-    logs = lucky.get("logs", []) or []
-    keywords = lucky.get("keywords", {}) or {}
-    ignore = [x.lower() for x in lucky.get("ignore_keywords", []) or []]
-
-    for path in logs:
-        offset = offsets.get(path, 0)
-        new_offset, data = tail_file(path, offset)
-        offsets[path] = new_offset
-        text = data.lower()
-        if not text:
-            continue
-        if any(x in text for x in ignore):
-            continue
-        for service, words in keywords.items():
-            if isinstance(words, str):
-                words = [words]
-            if any(w.lower() in text for w in words):
-                return service, offsets
-    return None, offsets
-
-
-def notify(cfg, message):
-    notify_cfg = cfg.get("notify", {})
-    log(message)
-    if not notify_cfg.get("enable", False):
-        return
-
-    webhook = notify_cfg.get("webhook", "")
-    if not webhook:
-        return
-
+def is_public_ip(ip):
     try:
-        mode = notify_cfg.get("mode", "text")
-        if mode == "wechat_robot":
-            payload = {"msgtype": "text", "text": {"content": message}}
-        else:
-            payload = {"text": message}
-        requests.post(webhook, json=payload, timeout=5)
+        obj = ipaddress.ip_address(ip.strip("[]"))
+        return obj.is_global
+    except Exception:
+        return False
+
+
+def extract_remote_ip(peer):
+    peer = peer.strip()
+    if peer.startswith("["):
+        end = peer.find("]")
+        return peer[1:end] if end > 0 else ""
+    if peer.count(":") > 1:
+        # IPv6 without brackets. Last colon may be port, but ipaddress handles full IPv6 poorly with port.
+        return peer.rsplit(":", 1)[0]
+    return peer.rsplit(":", 1)[0]
+
+
+def has_public_connection(cfg):
+    cc = cfg.get("connection", {})
+    if not cc.get("enable", True):
+        return False, []
+
+    ignore_ports = {str(p) for p in cc.get("ignore_remote_ports", [])}
+    try:
+        out = subprocess.check_output(["ss", "-tn", "state", "established"], text=True, timeout=3)
     except Exception as e:
-        log(f"通知失败: {e}")
+        log(f"公网连接检测失败: {e}")
+        return False, []
+
+    hits = []
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        peer = parts[4]
+        rip = extract_remote_ip(peer)
+        rport = peer.rsplit(":", 1)[-1]
+        if rport in ignore_ports:
+            continue
+        if is_public_ip(rip):
+            hits.append(rip)
+
+    return bool(hits), sorted(set(hits))[:5]
 
 
 def set_qb(cfg, limited):
@@ -125,38 +127,37 @@ def apply_limit(cfg, limited):
 
 def main():
     cfg = load_config()
-    iface = cfg.get("interface", "eth0")
+    iface = cfg.get("interface", "ovs_eth1")
     interval = int(cfg.get("interval", 1))
-    trigger = float(cfg.get("trigger", 0.5))
-    recover = float(cfg.get("recover", 0.2))
+    trigger = float(cfg.get("trigger", 2.0))
+    recover = float(cfg.get("recover", 0.3))
     trigger_count_need = int(cfg.get("trigger_count", 2))
     recover_count_need = int(cfg.get("recover_count", 60))
-    log_hold_seconds = int(cfg.get("log_hold_seconds", 60))
+    connection_hold = int(cfg.get("connection_hold_seconds", 60))
 
+    limited = False
     high_count = 0
     low_count = 0
-    limited = False
+    last_public_conn_ts = 0
     last_reason = ""
-    last_log_hit = 0
-    lucky_offsets = {}
 
     log("media-guard started")
     log(f"interface={iface}, interval={interval}s, trigger={trigger}MB/s, recover={recover}MB/s")
 
     while True:
         try:
-            service, lucky_offsets = detect_lucky(cfg, lucky_offsets)
+            has_conn, ips = has_public_connection(cfg)
             now = time.time()
-            if service:
-                last_log_hit = now
-                if not limited:
-                    last_reason = f"Lucky 日志检测到 {service} 外网访问"
+            if has_conn:
+                last_public_conn_ts = now
+                if cfg.get("connection", {}).get("immediate_limit", True) and not limited:
+                    last_reason = f"检测到公网连接: {', '.join(ips)}"
                     apply_limit(cfg, True)
                     limited = True
                     notify(cfg, f"{last_reason}，已立即限速 qBittorrent / Transmission")
 
             speed = get_upload_speed_mb(iface, interval)
-            log(f"当前上传: {speed:.2f} MB/s, limited={limited}")
+            log(f"当前上传: {speed:.2f} MB/s, 公网连接={has_conn}, limited={limited}")
 
             if speed >= trigger:
                 high_count += 1
@@ -168,18 +169,17 @@ def main():
                 high_count = 0
                 low_count = 0
 
-            log_recent = (now - last_log_hit) <= log_hold_seconds
-
             if not limited and high_count >= trigger_count_need:
                 last_reason = f"外网上传持续超过 {trigger} MB/s"
                 apply_limit(cfg, True)
                 limited = True
                 notify(cfg, f"{last_reason}，已自动限速 qBittorrent / Transmission")
 
-            if limited and low_count >= recover_count_need and not log_recent:
+            conn_recent = (now - last_public_conn_ts) <= connection_hold
+            if limited and low_count >= recover_count_need and not conn_recent:
                 apply_limit(cfg, False)
                 limited = False
-                notify(cfg, f"外网媒体访问结束，已恢复上传速度。上次触发原因：{last_reason}")
+                notify(cfg, f"外网访问结束，已恢复上传速度。上次触发原因：{last_reason}")
                 last_reason = ""
                 high_count = 0
                 low_count = 0
