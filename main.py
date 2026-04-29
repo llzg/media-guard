@@ -47,7 +47,6 @@ def calc_upload_speed_mb(interface, last_tx, last_ts):
     try:
         now_tx = get_tx_bytes(interface)
     except Exception:
-        # 测试环境或接口不存在时兜底
         now_tx = last_tx if last_tx is not None else 0
 
     if last_tx is None or last_ts is None:
@@ -65,19 +64,19 @@ def is_public_ip(ip):
         return False
 
 
-def split_host_port(peer):
-    peer = peer.strip()
-    if peer.startswith("["):
-        end = peer.find("]")
-        host = peer[1:end]
-        port = peer[end + 2:] if end > 0 and len(peer) > end + 2 else ""
+def split_host_port(addr):
+    addr = addr.strip()
+    if addr.startswith("["):
+        end = addr.find("]")
+        host = addr[1:end]
+        port = addr[end + 2:] if end > 0 and len(addr) > end + 2 else ""
         return host, port
-    if peer.count(":") > 1:
-        host, _, port = peer.rpartition(":")
+    if addr.count(":") > 1:
+        host, _, port = addr.rpartition(":")
         return host, port
-    if ":" in peer:
-        return peer.rsplit(":", 1)
-    return peer, ""
+    if ":" in addr:
+        return addr.rsplit(":", 1)
+    return addr, ""
 
 
 def parse_ss_connections():
@@ -87,9 +86,11 @@ def parse_ss_connections():
         parts = line.split()
         if len(parts) < 4:
             continue
+        local = parts[-2]
         peer = parts[-1]
+        lip, lport = split_host_port(local)
         rip, rport = split_host_port(peer)
-        result.append((rip, rport))
+        result.append((lip, str(lport), rip, str(rport)))
     return result
 
 
@@ -105,44 +106,55 @@ def parse_proc_tcp_file(path, ipv6=False):
         parts = line.split()
         if len(parts) < 4 or parts[3] != "01":
             continue
+        local = parts[1]
         remote = parts[2]
-        hex_ip, hex_port = remote.split(":")
+        local_hex_ip, local_hex_port = local.split(":")
+        remote_hex_ip, remote_hex_port = remote.split(":")
         try:
             if ipv6:
-                raw = bytes.fromhex(hex_ip)
-                rip = socket.inet_ntop(socket.AF_INET6, raw)
+                lip = socket.inet_ntop(socket.AF_INET6, bytes.fromhex(local_hex_ip))
+                rip = socket.inet_ntop(socket.AF_INET6, bytes.fromhex(remote_hex_ip))
             else:
-                raw = bytes.fromhex(hex_ip)
-                rip = socket.inet_ntop(socket.AF_INET, raw[::-1])
-            rport = str(int(hex_port, 16))
-            result.append((rip, rport))
+                lip = socket.inet_ntop(socket.AF_INET, bytes.fromhex(local_hex_ip)[::-1])
+                rip = socket.inet_ntop(socket.AF_INET, bytes.fromhex(remote_hex_ip)[::-1])
+            lport = str(int(local_hex_port, 16))
+            rport = str(int(remote_hex_port, 16))
+            result.append((lip, lport, rip, rport))
         except Exception:
             continue
     return result
 
 
-def has_public_connection(cfg):
+def get_connections():
+    try:
+        return parse_ss_connections()
+    except FileNotFoundError:
+        return parse_proc_tcp_file("/proc/net/tcp", ipv6=False) + parse_proc_tcp_file("/proc/net/tcp6", ipv6=True)
+    except Exception as e:
+        log(f"ss 检测失败，尝试 /proc/net/tcp: {e}")
+        return parse_proc_tcp_file("/proc/net/tcp", ipv6=False) + parse_proc_tcp_file("/proc/net/tcp6", ipv6=True)
+
+
+def has_media_public_connection(cfg):
     cc = cfg.get("connection", {})
     if not cc.get("enable", True):
         return False, []
 
-    ignore_ports = {str(p) for p in cc.get("ignore_remote_ports", [])}
-    conns = []
+    monitor_local_ports = {str(p) for p in cc.get("monitor_local_ports", [])}
+    if cc.get("require_monitor_ports", True) and not monitor_local_ports:
+        return False, []
 
-    try:
-        conns = parse_ss_connections()
-    except FileNotFoundError:
-        conns = parse_proc_tcp_file("/proc/net/tcp", ipv6=False) + parse_proc_tcp_file("/proc/net/tcp6", ipv6=True)
-    except Exception as e:
-        log(f"ss 检测失败，尝试 /proc/net/tcp: {e}")
-        conns = parse_proc_tcp_file("/proc/net/tcp", ipv6=False) + parse_proc_tcp_file("/proc/net/tcp6", ipv6=True)
+    ignore_remote_ports = {str(p) for p in cc.get("ignore_remote_ports", [])}
+    ignore_local_ports = {str(p) for p in cc.get("ignore_local_ports", [])}
 
     hits = []
-    for rip, rport in conns:
-        if str(rport) in ignore_ports:
+    for _lip, lport, rip, rport in get_connections():
+        if rport in ignore_remote_ports or lport in ignore_local_ports:
+            continue
+        if monitor_local_ports and lport not in monitor_local_ports:
             continue
         if is_public_ip(rip):
-            hits.append(rip)
+            hits.append(f"{rip}:{rport}->:{lport}")
 
     return bool(hits), sorted(set(hits))[:5]
 
@@ -160,7 +172,6 @@ class LimitController:
         try:
             if self.qb is None:
                 url = qbcfg["url"]
-                # 去掉 http:// 前缀，QBClient 的 host 只要 IP:Port
                 host = url.replace("http://", "").replace("https://", "")
                 self.qb = QBClient(host=host, username=qbcfg["user"], password=qbcfg["pass"])
                 self.qb.auth_log_in()
@@ -168,10 +179,8 @@ class LimitController:
             self.qb.transfer.set_upload_limit(int(limit) * 1024)
             log(f"qBittorrent 上传限速: {limit} KB/s")
         except Exception as e:
-            import traceback
             self.qb = None
             log(f"qBittorrent 设置失败: {e}")
-            log(f"详细: {traceback.format_exc()}")
 
     def set_tr(self, limited):
         trcfg = self.cfg.get("tr", {})
@@ -179,14 +188,16 @@ class LimitController:
             return
         try:
             if self.tr is None:
-                self.tr = TRClient(host=trcfg["host"], port=trcfg["port"], username=trcfg["user"], password=trcfg["pass"])
+                self.tr = TRClient(host=trcfg["host"], port=int(trcfg["port"]), username=trcfg["user"], password=trcfg["pass"])
             limit = trcfg["limit"] if limited else trcfg.get("normal", 0)
-            if int(limit) <= 0:
-                self.tr.set_session(speed_limit_up_enabled=False)
-                log("Transmission 上传限速: 不限速")
+            payload = {"speed_limit_up_enabled": int(limit) > 0}
+            if int(limit) > 0:
+                payload["speed_limit_up"] = int(limit)
+            if hasattr(self.tr, "set_session"):
+                self.tr.set_session(**payload)
             else:
-                self.tr.set_session(speed_limit_up_enabled=True, speed_limit_up=int(limit))
-                log(f"Transmission 上传限速: {limit} KB/s")
+                self.tr.session_set(**payload)
+            log(f"Transmission 上传限速: {limit if int(limit) > 0 else '不限速'} KB/s")
         except Exception as e:
             self.tr = None
             log(f"Transmission 设置失败: {e}")
@@ -205,12 +216,13 @@ def main():
     trigger_count_need = int(cfg.get("trigger_count", 2))
     recover_count_need = int(cfg.get("recover_count", 60))
     connection_hold = int(cfg.get("connection_hold_seconds", 60))
+    bandwidth_fallback = cfg.get("bandwidth_fallback", {}).get("enable", False)
 
     controller = LimitController(cfg)
     limited = False
     high_count = 0
     low_count = 0
-    last_public_conn_ts = 0
+    last_media_conn_ts = 0
     last_reason = ""
     last_tx = None
     last_ts = None
@@ -221,16 +233,18 @@ def main():
     while True:
         loop_start = time.time()
         try:
-            has_conn, ips = has_public_connection(cfg)
+            has_conn, hits = has_media_public_connection(cfg)
             now = time.time()
             if has_conn:
-                last_public_conn_ts = now
-                # 不再立即限速，只记录供参考
-                if not limited and cfg.get("connection", {}).get("immediate_limit", True) and last_public_conn_ts - now < 2:
-                    log(f"检测到公网连接: {', '.join(ips)} (仅记录，不限速)")
+                last_media_conn_ts = now
+                if cfg.get("connection", {}).get("immediate_limit", True) and not limited:
+                    last_reason = f"检测到公网媒体连接: {', '.join(hits)}"
+                    controller.apply(True)
+                    limited = True
+                    notify(cfg, f"{last_reason}，已立即限速 qBittorrent / Transmission")
 
             speed, last_tx, last_ts = calc_upload_speed_mb(iface, last_tx, last_ts)
-            log(f"当前上传: {speed:.2f} MB/s, 公网连接={has_conn}, limited={limited}")
+            log(f"当前上传: {speed:.2f} MB/s, 媒体公网连接={has_conn}, limited={limited}")
 
             if speed >= trigger:
                 high_count += 1
@@ -242,18 +256,17 @@ def main():
                 high_count = 0
                 low_count = 0
 
-            if not limited and high_count >= trigger_count_need:
+            if bandwidth_fallback and not limited and high_count >= trigger_count_need:
                 last_reason = f"外网上传持续超过 {trigger} MB/s"
                 controller.apply(True)
                 limited = True
                 notify(cfg, f"{last_reason}，已自动限速 qBittorrent / Transmission")
 
-            conn_recent = (now - last_public_conn_ts) <= connection_hold
-            # 恢复只看上传速率，不看公网连接了（TR 一直在做种）
-            if limited and low_count >= recover_count_need:
+            conn_recent = (now - last_media_conn_ts) <= connection_hold
+            if limited and low_count >= recover_count_need and not conn_recent:
                 controller.apply(False)
                 limited = False
-                notify(cfg, f"外网访问结束，已恢复上传速度。上次触发原因：{last_reason}")
+                notify(cfg, f"外网媒体访问结束，已恢复上传速度。上次触发原因：{last_reason}")
                 last_reason = ""
                 high_count = 0
                 low_count = 0
